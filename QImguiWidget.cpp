@@ -95,7 +95,7 @@ bool QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 			glDeleteProgram(ctx->ShaderHandle);
 		});
 
-
+	this->OnImguiInitialized();
 
 	return true;
 }
@@ -107,6 +107,11 @@ void QImguiWidget::RunImguiWidgets() {
 	ImGui::GetForegroundDrawList()->AddCircleFilled(ImGui::GetIO().MousePos, 5, 0xff0000ff);
 	ImGui::GetForegroundDrawList()->AddText({ 10,10 }, 0xff0000ff, QString("DeltaTime[ %1 ] / FPS[ %2 ]").arg(ImGui::GetIO().DeltaTime).arg((int)(1.0f / ImGui::GetIO().DeltaTime)).toUtf8().data());
 #endif // DEBUG
+}
+void QImguiWidget::OnImguiInitialized() {
+#ifdef _DEBUG
+	ImGui::StyleColorsLight();
+#endif
 }
 void QImguiWidget::QtImguiImplNewFarme() {
 	//选定imgui上下文

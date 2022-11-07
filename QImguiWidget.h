@@ -17,6 +17,7 @@ public:
 
 protected:/*Interface*/
     virtual void RunImguiWidgets();
+    virtual void OnImguiInitialized();
 private:/*qt impl backend*/
     void QtImguiImplNewFarme();
 protected:/*opengl impl backend*/
