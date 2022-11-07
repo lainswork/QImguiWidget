@@ -5,7 +5,7 @@
 #include <QDebug>
 #include <QClipboard>
 #include <QTimer>
-
+#include <QVector>
 #ifdef ANDROID
 #define GL_VERTEX_ARRAY_BINDING 0x85B5 // Missing in android as of May 2020
 #define USE_GLSL_ES
@@ -17,6 +17,7 @@
 #define IMGUIRENDERER_GLSL_VERSION "#version 330\n"
 #endif
 
+
 /*Qt opengl backend res*/
 struct QImguiWidgetImplContext
 {
@@ -25,12 +26,18 @@ struct QImguiWidgetImplContext
 	int          AttribLocationTex = 0, AttribLocationProjMtx = 0;
 	int          AttribLocationPosition = 0, AttribLocationUV = 0, AttribLocationColor = 0;
 	unsigned int VboHandle = 0, VaoHandle = 0, ElementsHandle = 0;
+	int            fb_width = 0;
+	int            fb_height = 0;
+	bool frameDrawing = false;
+	QVector<ImDrawList*> DrawData;
 	QElapsedTimer                                    Timer;
 	QImguiWidgetImplContext(ImFontAtlas* shared_font_atlas = NULL) {
 		this->imgui = ImGui::CreateContext(shared_font_atlas);
 		Timer.start();
 	}
 	~QImguiWidgetImplContext() {
+		for (auto i : DrawData)
+			ImGui::MemFree(i);
 		if (this->imgui)ImGui::DestroyContext(this->imgui);
 	}
 };
@@ -39,12 +46,14 @@ QImguiWidget::QImguiWidget(QWidget* parent) : QOpenGLWidget(parent) {
 	//鼠标跟踪
 	this->setMouseTracking(true);
 	//接收输入法内容
-	this->setAttribute(Qt::WA_InputMethodEnabled); 
+	this->setAttribute(Qt::WA_InputMethodEnabled);
 	//允许切换输入法
-	this->setAttribute(Qt::WA_KeyCompression);    
+	this->setAttribute(Qt::WA_KeyCompression);
 	// timer 定时刷新
-	QTimer* timer = new QTimer(this);       
-	QObject::connect(timer, &QTimer::timeout, [this]() { this->update(); });
+	QTimer* timer = new QTimer(this);
+	QObject::connect(timer, &QTimer::timeout, [this]() {
+		this->update();
+		});
 	timer->start(16);
 	this->FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas());
 }
@@ -81,7 +90,7 @@ bool QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 			this->glDeleteTextures(1, &FontTex);
 			FontTex = {};
 		}
-		if (ctx->VaoHandle) 
+		if (ctx->VaoHandle)
 			glDeleteVertexArrays(1, &ctx->VaoHandle);
 		if (ctx->ElementsHandle)
 			glDeleteBuffers(1, &ctx->ElementsHandle);
@@ -116,7 +125,7 @@ void QImguiWidget::OnImguiInitialized() {
 void QImguiWidget::QtImguiImplNewFarme() {
 	//选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui); 
+	ImGui::SetCurrentContext(ctx->imgui);
 
 	ImGuiIO& io = ImGui::GetIO();
 	//显示大小
@@ -127,7 +136,7 @@ void QImguiWidget::QtImguiImplNewFarme() {
 	if (ctx->Timer.elapsed() <= 0)
 		io.DeltaTime = 0.001f;
 	else
-		io.DeltaTime = (float)ctx->Timer.elapsed() / 1000.f;	
+		io.DeltaTime = (float)ctx->Timer.elapsed() / 1000.f;
 	ctx->Timer.restart();
 	//imgui更新系统鼠标位置
 #ifndef QT_NO_CURSOR
@@ -193,7 +202,7 @@ GLuint QImguiWidget::CreateTexture(uint8_t* data, int w, int h, int fmt) {
 	return tex;
 };
 void QImguiWidget::initializeGL() {
-	
+
 	this->initializeOpenGLFunctions(); // 初始化opengl api
 	GLint last_texture, last_array_buffer, last_vertex_array;
 	this->glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
@@ -229,7 +238,7 @@ void QImguiWidget::initializeGL() {
 	ctx->ShaderHandle = glCreateProgram();
 	ctx->VertHandle = glCreateShader(GL_VERTEX_SHADER);
 	ctx->FragHandle = glCreateShader(GL_FRAGMENT_SHADER);
-	
+
 	glShaderSource(ctx->VertHandle, 1, &vertex_shader, 0);
 	glShaderSource(ctx->FragHandle, 1, &fragment_shader, 0);
 	glCompileShader(ctx->VertHandle);
@@ -252,7 +261,7 @@ void QImguiWidget::initializeGL() {
 	glEnableVertexAttribArray(ctx->AttribLocationPosition);
 	glEnableVertexAttribArray(ctx->AttribLocationUV);
 	glEnableVertexAttribArray(ctx->AttribLocationColor);
-	
+
 #pragma push_macro("OFFSETOF")
 #define OFFSETOF(TYPE, ELEMENT) ((size_t) & (((TYPE *)0)->ELEMENT))
 	glVertexAttribPointer(ctx->AttribLocationPosition, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert),
@@ -273,14 +282,47 @@ void QImguiWidget::resizeGL(int w, int h) { this->glViewport(0.0f, 0.0f, w, h); 
 void QImguiWidget::paintGL() {
 	// 选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui); 
-	this->QtImguiImplNewFarme();
-	this->QtOpenGlNewFarme();
-	ImGui::NewFrame();
-	this->RunImguiWidgets();
-	ImGui::EndFrame();
-	// imgui 生成绘制数据
-	ImGui::Render();                 
+	// frameDrawing 的存在是为了防止递归调用，RunImguiWidgets 中可能存在阻塞式的QT窗口
+	if (!ctx->frameDrawing) {
+		ctx->frameDrawing = true;
+		ImGui::SetCurrentContext(ctx->imgui);
+		this->QtImguiImplNewFarme();
+		this->QtOpenGlNewFarme();
+		ImGui::NewFrame();
+		this->RunImguiWidgets();
+		ImGui::EndFrame();
+		// imgui 生成绘制数据
+		ImGui::Render();
+
+		// 将绘制数据放到 ctx->DrawData 中
+		auto* DrawData = ImGui::GetDrawData();
+		
+		const ImGuiIO& io = ImGui::GetIO();
+		ctx->fb_width = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
+		ctx->fb_height = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
+		if (ctx->fb_width == 0 || ctx->fb_height == 0)
+			return;
+
+		DrawData->ScaleClipRects(io.DisplayFramebufferScale);
+
+		for (size_t i = 0; i < ctx->DrawData.count(); i++) {
+			ctx->DrawData[i]->_ResetForNewFrame();
+			ctx->DrawData[i]->CmdBuffer = DrawData->CmdLists[i]->CmdBuffer;
+			ctx->DrawData[i]->IdxBuffer = DrawData->CmdLists[i]->IdxBuffer;
+			ctx->DrawData[i]->VtxBuffer = DrawData->CmdLists[i]->VtxBuffer;
+			ctx->DrawData[i]->Flags = DrawData->CmdLists[i]->Flags;
+		}
+
+		int oriDrawListCount = ctx->DrawData.count();
+		if (DrawData->CmdListsCount > oriDrawListCount) {
+			int needDrawList = DrawData->CmdListsCount - oriDrawListCount;
+			for (size_t i = 0; i < needDrawList; i++)
+				ctx->DrawData.push_back(DrawData->CmdLists[oriDrawListCount + i]->CloneOutput());
+		}
+		
+		ctx->frameDrawing = false;
+	}
+	
 	this->QtOpenGlSetClearRenderTarget();
 	this->QtOpenGlRenderData();
 
@@ -314,13 +356,7 @@ void QImguiWidget::QtOpenGlRenderData() {
 	// 选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 	ImGui::SetCurrentContext(ctx->imgui);
-	auto draw_data = ImGui::GetDrawData();
 	const ImGuiIO& io = ImGui::GetIO();
-	int            fb_width = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
-	int            fb_height = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
-	if (fb_width == 0 || fb_height == 0)
-		return;
-	draw_data->ScaleClipRects(io.DisplayFramebufferScale);
 
 	// Backup GL state
 	GLint last_active_texture;
@@ -366,7 +402,7 @@ void QImguiWidget::QtOpenGlRenderData() {
 	glEnable(GL_SCISSOR_TEST);
 
 	// Setup viewport, orthographic projection matrix
-	glViewport(0, 0, (GLsizei)fb_width, (GLsizei)fb_height);
+	glViewport(0, 0, (GLsizei)ctx->fb_width, (GLsizei)ctx->fb_height);
 	const float ortho_projection[4][4] = {
 		{2.0f / io.DisplaySize.x, 0.0f, 0.0f, 0.0f},
 		{0.0f, 2.0f / -io.DisplaySize.y, 0.0f, 0.0f},
@@ -378,8 +414,8 @@ void QImguiWidget::QtOpenGlRenderData() {
 	glUniformMatrix4fv(ctx->AttribLocationProjMtx, 1, GL_FALSE, &ortho_projection[0][0]);
 	glBindVertexArray(ctx->VaoHandle);
 
-	for (int n = 0; n < draw_data->CmdListsCount; n++) {
-		const ImDrawList* cmd_list = draw_data->CmdLists[n];
+	for (int n = 0; n < ctx->DrawData.count(); n++) {
+		const ImDrawList* cmd_list = ctx->DrawData[n];
 		const ImDrawIdx* idx_buffer_offset = 0;
 
 		glBindBuffer(GL_ARRAY_BUFFER, ctx->VboHandle);
@@ -397,7 +433,7 @@ void QImguiWidget::QtOpenGlRenderData() {
 			}
 			else {
 				glBindTexture(GL_TEXTURE_2D, reinterpret_cast<decltype(this)>(pcmd->TextureId)->FontTex);
-				glScissor((int)pcmd->ClipRect.x, (int)(fb_height - pcmd->ClipRect.w),
+				glScissor((int)pcmd->ClipRect.x, (int)(ctx->fb_height - pcmd->ClipRect.w),
 					(int)(pcmd->ClipRect.z - pcmd->ClipRect.x), (int)(pcmd->ClipRect.w - pcmd->ClipRect.y));
 				glDrawElements(GL_TRIANGLES, (GLsizei)pcmd->ElemCount,
 					sizeof(ImDrawIdx) == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, idx_buffer_offset);
@@ -653,7 +689,7 @@ void QImguiWidget::keyPressEvent(QKeyEvent* event) {
 		auto& io = ImGui::GetIO();
 		if (key != ImGuiKey_None)
 			io.AddKeyEvent(key, true);
-		if(!event->text().isEmpty())
+		if (!event->text().isEmpty())
 			io.AddInputCharacterUTF16(event->text()[0].unicode());
 	}
 	else
