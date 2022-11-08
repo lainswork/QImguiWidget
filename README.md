@@ -5,9 +5,8 @@
 
 > 该GUI库特点是即时、高刷、动态UI、后端无关、轻量级、简单实用。
 
-## 使用方式 
+## 使用方式(qmake)
 
-.pro
 ```cmake
 # qt 项目 '.pro' 文件中加入
 include(xxxxxxx/QImguiWidget/QImguiWidget.pri)
@@ -36,6 +35,16 @@ protected:
     ImGui::LabelText("###lable","hello text lable!");
     ImGui::End();
 ```
+
+## 使用方式(cmake)
+
+```cmake
+# 在CMakeList.txt 中  add_executable 指令前加入:
+include(本库路径/QImguiWidget/FindQImguiWidget.cmake)
+#在 add_executable 指令添加目标文件后,加入:
+target_link_libraries(${PROJECT_NAME} PRIVATE QImguiWidget)
+```
+
 
 ## 注意事项
 
