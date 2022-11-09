@@ -43,7 +43,7 @@ private:/*qt event override functions for input*/
     void keyReleaseEvent(QKeyEvent* event) override;
     void inputMethodEvent(QInputMethodEvent* event) override;
 private:
-    void* impl;
+    void* impl = nullptr;
     GLuint FontTex = {};
     QSharedPointer<ImFontAtlas> FontAtlas;
     QColor ClearColor = {20,20,20,20};

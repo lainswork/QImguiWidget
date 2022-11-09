@@ -36,7 +36,7 @@ struct QImguiWidgetImplContext
 		Timer.start();
 	}
 	~QImguiWidgetImplContext() {
-		for (auto i : DrawData)
+		for (auto i : this->DrawData)
 			ImGui::MemFree(i);
 		if (this->imgui)ImGui::DestroyContext(this->imgui);
 	}
