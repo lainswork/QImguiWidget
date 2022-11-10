@@ -214,7 +214,9 @@ void QImguiWidget::resizeGL(int w, int h) {
 	this->context()->extraFunctions()->glViewport(0.0f, 0.0f, w, h);
 }
 void QImguiWidget::paintGL() {
-
+	//这里防止的是QT的事件机制导致paintGL 重入,在多个imgui上下文存在时导致一系列的问题
+	auto* OldImguiCtx =  ImGui::GetCurrentContext();
+	
 
 	// 选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
@@ -241,9 +243,10 @@ void QImguiWidget::paintGL() {
 		const ImGuiIO& io = ImGui::GetIO();
 		ctx->fb_width = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
 		ctx->fb_height = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
-		if (ctx->fb_width == 0 || ctx->fb_height == 0)
+		if (ctx->fb_width == 0 || ctx->fb_height == 0) {
+			ctx->frameDrawing = false;
 			return;
-
+		}
 		DrawData->ScaleClipRects(io.DisplayFramebufferScale);
 
         for (int i = 0; i < ctx->DrawData.count(); i++) {
@@ -265,12 +268,12 @@ void QImguiWidget::paintGL() {
 	}
 	else
 	{
-		qDebug() << u8"绘制旧数据";
+		//qDebug() << u8"drawing old imgui data";
 	}
 
 	this->QtOpenGlSetClearRenderTarget();
 	this->QtOpenGlRenderData();
-
+	ImGui::SetCurrentContext(OldImguiCtx);
 }
 void QImguiWidget::closeEvent(QCloseEvent* event) {
 	this->QtOpenGlDevicesClean();
@@ -417,7 +420,7 @@ void QImguiWidget::QtOpenGlNewFarme() {
 		FontTex = this->CreateTexture(pixels, width, height, GL_RGBA);
 		FontAtlas->SetTexID((ImTextureID)1);
 		//qDebug() << " GL FontAtlas Texture build!  " << FontTex;
-		this->setWindowTitle(QString("Texture id %1").arg((int)FontTex));
+		//this->setWindowTitle(QString("Texture id %1").arg((int)FontTex));
 
 	};
 	// 此处判断发生在渲染第一次执行或更新(添加)字体后
