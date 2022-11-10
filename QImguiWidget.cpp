@@ -46,18 +46,21 @@ QImguiWidget::QImguiWidget(QWidget* parent) : QOpenGLWidget(parent) {
 	this->setAttribute(Qt::WA_InputMethodEnabled);
 	//允许切换输入法
 	this->setAttribute(Qt::WA_KeyCompression);
+
+	this->FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas());
+	this->impl = new QImguiWidgetImplContext();
+	//我们在widget窗口销毁时进行OPENGL资源'后处理'
+	//QObject::connect(this, &QWidget::destroyed, [this]() {this->QtOpenGlDevicesClean(); });
 	// timer 定时刷新
 	QTimer* timer = new QTimer(this);
 	QObject::connect(timer, &QTimer::timeout, [this]() {
 		this->update();
 		});
 	timer->start(16);
-	this->FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas());
-	this->impl = new QImguiWidgetImplContext();
-
 }
 
 QImguiWidget::~QImguiWidget() {
+	//this->QtOpenGlDevicesClean();
 	if (this->impl) {
 		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 		for (auto i : ctx->DrawData)
@@ -66,6 +69,7 @@ QImguiWidget::~QImguiWidget() {
 		delete reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 	}
 }
+
 QImguiWidget* QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 	//初始化
 	this->FontAtlas.reset();
@@ -89,31 +93,10 @@ QImguiWidget* QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 	ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 	ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
 #endif
-	//我们在widget窗口销毁时进行OPENGL资源'后处理'
-	QObject::connect(this, &QWidget::destroyed, [this]() {
-		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	// 销毁字体纹理
-	if (FontTex) {
-		this->glDeleteTextures(1, &FontTex);
-		FontTex = {};
-	}
-	if (ctx->VaoHandle)
-		glDeleteVertexArrays(1, &ctx->VaoHandle);
-	if (ctx->ElementsHandle)
-		glDeleteBuffers(1, &ctx->ElementsHandle);
-	if (ctx->VboHandle)
-		glDeleteBuffers(1, &ctx->VboHandle);
-	if (ctx->FragHandle)
-		glDeleteShader(ctx->FragHandle);
-	if (ctx->VertHandle)
-		glDeleteShader(ctx->VertHandle);
-	if (ctx->ShaderHandle)
-		glDeleteProgram(ctx->ShaderHandle);
-		});
 
 	this->OnImguiInitialized();
 
-    return this;
+	return this;
 }
 void QImguiWidget::RunImguiWidgets() {
 #ifdef _DEBUG
@@ -199,93 +182,37 @@ void QImguiWidget::QtImguiImplNewFarme() {
 GLuint QImguiWidget::CreateTexture(uint8_t* data, int w, int h, int fmt) {
 	GLuint tex{};
 	GLint  last_texture{};
-	glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-	glGenTextures(1, &tex);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
-	glBindTexture(GL_TEXTURE_2D, last_texture);
+    auto* gl =this->context();
+    auto* funs = gl->extraFunctions();
+	funs->glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+	funs->glGenTextures(1, &tex);
+	funs->glBindTexture(GL_TEXTURE_2D, tex);
+	funs->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	funs->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	funs->glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
+	funs->glBindTexture(GL_TEXTURE_2D, last_texture);
+
+	/*
+	当QImguiWidget窗口作为 QDockWidget 内容时 : QImguiWidget窗口 从依附的主窗口挪出时，会造成OpenGl上下文切换
+	即: this->context() 所得到的指针会变，原OpenGl上下文 会被销毁，因此，我们要在原OpenGl上下文销毁前，删除用该
+	上下文创造的所有OpenGl资源。方法:"响应 QOpenGLContext::aboutToBeDestroyed 信号"
+	*/
+    QObject::connect(this->context(), &QOpenGLContext::aboutToBeDestroyed, [gl,tex]() {
+         gl->extraFunctions()->glDeleteTextures(1, &tex);
+        });
+
 	return tex;
 };
 void QImguiWidget::initializeGL() {
+	this->QtOpenGlDevicesClean();
+	// 初始化opengl api
+	this->context()->extraFunctions()->initializeOpenGLFunctions();
 
-	this->initializeOpenGLFunctions(); // 初始化opengl api
-	GLint last_texture, last_array_buffer, last_vertex_array;
-	this->glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-	this->glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
-	this->glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
-
-	const GLchar* vertex_shader = IMGUIRENDERER_GLSL_VERSION "uniform mat4 ProjMtx;\n"
-		"in vec2 Position;\n"
-		"in vec2 UV;\n"
-		"in vec4 Color;\n"
-		"out vec2 Frag_UV;\n"
-		"out vec4 Frag_Color;\n"
-		"void main()\n"
-		"{\n"
-		"	Frag_UV = UV;\n"
-		"	Frag_Color = Color;\n"
-		"	gl_Position = ProjMtx * vec4(Position.xy,0,1);\n"
-		"}\n";
-
-	const GLchar* fragment_shader =
-		IMGUIRENDERER_GLSL_VERSION "precision mediump float;"
-		"uniform sampler2D Texture;\n"
-		"in vec2 Frag_UV;\n"
-		"in vec4 Frag_Color;\n"
-		"out vec4 Out_Color;\n"
-		"void main()\n"
-		"{\n"
-		"	Out_Color = Frag_Color * texture( Texture, Frag_UV.st);\n"
-		"}\n";
-
-	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-
-	ctx->ShaderHandle = glCreateProgram();
-	ctx->VertHandle = glCreateShader(GL_VERTEX_SHADER);
-	ctx->FragHandle = glCreateShader(GL_FRAGMENT_SHADER);
-
-	glShaderSource(ctx->VertHandle, 1, &vertex_shader, 0);
-	glShaderSource(ctx->FragHandle, 1, &fragment_shader, 0);
-	glCompileShader(ctx->VertHandle);
-	glCompileShader(ctx->FragHandle);
-	glAttachShader(ctx->ShaderHandle, ctx->VertHandle);
-	glAttachShader(ctx->ShaderHandle, ctx->FragHandle);
-	glLinkProgram(ctx->ShaderHandle);
-
-	ctx->AttribLocationTex = glGetUniformLocation(ctx->ShaderHandle, "Texture");
-	ctx->AttribLocationProjMtx = glGetUniformLocation(ctx->ShaderHandle, "ProjMtx");
-	ctx->AttribLocationPosition = glGetAttribLocation(ctx->ShaderHandle, "Position");
-	ctx->AttribLocationUV = glGetAttribLocation(ctx->ShaderHandle, "UV");
-	ctx->AttribLocationColor = glGetAttribLocation(ctx->ShaderHandle, "Color");
-
-	glGenBuffers(1, &ctx->VboHandle);
-	glGenBuffers(1, &ctx->ElementsHandle);
-	glGenVertexArrays(1, &ctx->VaoHandle);
-	glBindVertexArray(ctx->VaoHandle);
-	glBindBuffer(GL_ARRAY_BUFFER, ctx->VboHandle);
-	glEnableVertexAttribArray(ctx->AttribLocationPosition);
-	glEnableVertexAttribArray(ctx->AttribLocationUV);
-	glEnableVertexAttribArray(ctx->AttribLocationColor);
-
-#pragma push_macro("OFFSETOF")
-#define OFFSETOF(TYPE, ELEMENT) ((size_t) & (((TYPE *)0)->ELEMENT))
-	glVertexAttribPointer(ctx->AttribLocationPosition, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert),
-		(GLvoid*)OFFSETOF(ImDrawVert, pos));
-	glVertexAttribPointer(ctx->AttribLocationUV, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert),
-		(GLvoid*)OFFSETOF(ImDrawVert, uv));
-	glVertexAttribPointer(ctx->AttribLocationColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(ImDrawVert),
-		(GLvoid*)OFFSETOF(ImDrawVert, col));
-#undef OFFSETOF
-#pragma pop_macro("OFFSETOF")
-	// Restore modified GL state
-	glBindTexture(GL_TEXTURE_2D, last_texture);
-	glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-	glBindVertexArray(last_vertex_array);
-
+	this->QtOpenGlDevicesCreate();
 }
-void QImguiWidget::resizeGL(int w, int h) { this->glViewport(0.0f, 0.0f, w, h); }
+void QImguiWidget::resizeGL(int w, int h) {
+	this->context()->extraFunctions()->glViewport(0.0f, 0.0f, w, h);
+}
 void QImguiWidget::paintGL() {
 
 
@@ -319,7 +246,7 @@ void QImguiWidget::paintGL() {
 
 		DrawData->ScaleClipRects(io.DisplayFramebufferScale);
 
-		for (size_t i = 0; i < ctx->DrawData.count(); i++) {
+        for (int i = 0; i < ctx->DrawData.count(); i++) {
 			ctx->DrawData[i]->_ResetForNewFrame();
 			ctx->DrawData[i]->CmdBuffer = DrawData->CmdLists[i]->CmdBuffer;
 			ctx->DrawData[i]->IdxBuffer = DrawData->CmdLists[i]->IdxBuffer;
@@ -330,16 +257,157 @@ void QImguiWidget::paintGL() {
 		int oriDrawListCount = ctx->DrawData.count();
 		if (DrawData->CmdListsCount > oriDrawListCount) {
 			int needDrawList = DrawData->CmdListsCount - oriDrawListCount;
-			for (size_t i = 0; i < needDrawList; i++)
+            for (int i = 0; i < needDrawList; i++)
 				ctx->DrawData.push_back(DrawData->CmdLists[oriDrawListCount + i]->CloneOutput());
 		}
 
 		ctx->frameDrawing = false;
 	}
+	else
+	{
+		qDebug() << u8"绘制旧数据";
+	}
 
 	this->QtOpenGlSetClearRenderTarget();
 	this->QtOpenGlRenderData();
 
+}
+void QImguiWidget::closeEvent(QCloseEvent* event) {
+	this->QtOpenGlDevicesClean();
+	event->accept();
+}
+void QImguiWidget::QtOpenGlDevicesCreate() {
+	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+
+	if (!ctx)
+		return;
+    auto* gl = this->context();
+    auto* funs = gl->extraFunctions();
+	GLint last_texture, last_array_buffer, last_vertex_array;
+	funs->glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+	funs->glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+	funs->glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+
+	const GLchar* vertex_shader = IMGUIRENDERER_GLSL_VERSION "uniform mat4 ProjMtx;\n"
+		"in vec2 Position;\n"
+		"in vec2 UV;\n"
+		"in vec4 Color;\n"
+		"out vec2 Frag_UV;\n"
+		"out vec4 Frag_Color;\n"
+		"void main()\n"
+		"{\n"
+		"	Frag_UV = UV;\n"
+		"	Frag_Color = Color;\n"
+		"	gl_Position = ProjMtx * vec4(Position.xy,0,1);\n"
+		"}\n";
+
+	const GLchar* fragment_shader =
+		IMGUIRENDERER_GLSL_VERSION "precision mediump float;"
+		"uniform sampler2D Texture;\n"
+		"in vec2 Frag_UV;\n"
+		"in vec4 Frag_Color;\n"
+		"out vec4 Out_Color;\n"
+		"void main()\n"
+		"{\n"
+		"	Out_Color = Frag_Color * texture( Texture, Frag_UV.st);\n"
+		"}\n";
+
+
+
+
+	ctx->ShaderHandle = funs->glCreateProgram();
+	ctx->VertHandle = funs->glCreateShader(GL_VERTEX_SHADER);
+	ctx->FragHandle = funs->glCreateShader(GL_FRAGMENT_SHADER);
+
+	funs->glShaderSource(ctx->VertHandle, 1, &vertex_shader, 0);
+	funs->glShaderSource(ctx->FragHandle, 1, &fragment_shader, 0);
+	funs->glCompileShader(ctx->VertHandle);
+	funs->glCompileShader(ctx->FragHandle);
+	funs->glAttachShader(ctx->ShaderHandle, ctx->VertHandle);
+	funs->glAttachShader(ctx->ShaderHandle, ctx->FragHandle);
+	funs->glLinkProgram(ctx->ShaderHandle);
+
+	ctx->AttribLocationTex = funs->glGetUniformLocation(ctx->ShaderHandle, "Texture");
+	ctx->AttribLocationProjMtx = funs->glGetUniformLocation(ctx->ShaderHandle, "ProjMtx");
+	ctx->AttribLocationPosition = funs->glGetAttribLocation(ctx->ShaderHandle, "Position");
+	ctx->AttribLocationUV = funs->glGetAttribLocation(ctx->ShaderHandle, "UV");
+	ctx->AttribLocationColor = funs->glGetAttribLocation(ctx->ShaderHandle, "Color");
+
+	funs->glGenBuffers(1, &ctx->VboHandle);
+	funs->glGenBuffers(1, &ctx->ElementsHandle);
+	funs->glGenVertexArrays(1, &ctx->VaoHandle);
+	funs->glBindVertexArray(ctx->VaoHandle);
+	funs->glBindBuffer(GL_ARRAY_BUFFER, ctx->VboHandle);
+	funs->glEnableVertexAttribArray(ctx->AttribLocationPosition);
+	funs->glEnableVertexAttribArray(ctx->AttribLocationUV);
+	funs->glEnableVertexAttribArray(ctx->AttribLocationColor);
+
+#pragma push_macro("OFFSETOF")
+#define OFFSETOF(TYPE, ELEMENT) ((size_t) & (((TYPE *)0)->ELEMENT))
+	funs->glVertexAttribPointer(ctx->AttribLocationPosition, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert),
+		(GLvoid*)OFFSETOF(ImDrawVert, pos));
+	funs->glVertexAttribPointer(ctx->AttribLocationUV, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert),
+		(GLvoid*)OFFSETOF(ImDrawVert, uv));
+	funs->glVertexAttribPointer(ctx->AttribLocationColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(ImDrawVert),
+		(GLvoid*)OFFSETOF(ImDrawVert, col));
+#undef OFFSETOF
+#pragma pop_macro("OFFSETOF")
+	// Restore modified GL state
+	funs->glBindTexture(GL_TEXTURE_2D, last_texture);
+	funs->glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+	funs->glBindVertexArray(last_vertex_array);
+
+
+    // 表达式值捕获是CXX14 所以这里要多此一举
+    auto VaoHandle = ctx->VaoHandle;
+    auto ElementsHandle = ctx->ElementsHandle;
+    auto VboHandle = ctx->VboHandle;
+    auto FragHandle = ctx->FragHandle;
+    auto VertHandle = ctx->VertHandle;
+    auto ShaderHandle = ctx->ShaderHandle;
+
+	/*
+当QImguiWidget窗口作为 QDockWidget 内容时 : QImguiWidget窗口 从依附的主窗口挪出时，会造成OpenGl上下文切换
+即: this->context() 所得到的指针会变，原OpenGl上下文 会被销毁，因此，我们要在原OpenGl上下文销毁前，删除用该
+上下文创造的所有OpenGl资源。方法:"响应 QOpenGLContext::aboutToBeDestroyed 信号"
+*/
+    QObject::connect(gl, &QOpenGLContext::aboutToBeDestroyed, [
+            gl,
+            VaoHandle ,
+            ElementsHandle ,
+            VboHandle ,
+            FragHandle ,
+            VertHandle,
+            ShaderHandle]() {
+
+		auto* funs = gl->extraFunctions();
+		funs->glDeleteVertexArrays(1, &VaoHandle);
+		funs->glDeleteVertexArrays(1, &VaoHandle);
+		funs->glDeleteBuffers(1, &ElementsHandle);
+		funs->glDeleteBuffers(1, &VboHandle);
+		funs->glDeleteShader(FragHandle);
+		funs->glDeleteShader(VertHandle);
+		funs->glDeleteProgram(ShaderHandle);
+
+		});
+}
+void QImguiWidget::QtOpenGlDevicesClean() {
+	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+	if (ctx) {
+		ctx->AttribLocationTex = {};
+		ctx->AttribLocationProjMtx = {};
+		ctx->AttribLocationPosition = {};
+		ctx->AttribLocationUV = {};
+		ctx->AttribLocationColor = {};
+		FontTex = {};
+		ctx->VaoHandle = {};
+		ctx->ElementsHandle = {};
+		ctx->VboHandle = {};
+		ctx->FragHandle = {};
+		ctx->VertHandle = {};
+		ctx->ShaderHandle = {};
+		return;
+	}
 }
 void QImguiWidget::QtOpenGlNewFarme() {
 	auto buildFontTex = [this]() {
@@ -347,97 +415,107 @@ void QImguiWidget::QtOpenGlNewFarme() {
 		int            width, height;
 		FontAtlas->GetTexDataAsRGBA32(&pixels, &width, &height);
 		FontTex = this->CreateTexture(pixels, width, height, GL_RGBA);
-		FontAtlas->SetTexID((ImTextureID)this);
+		FontAtlas->SetTexID((ImTextureID)1);
+		//qDebug() << " GL FontAtlas Texture build!  " << FontTex;
+		this->setWindowTitle(QString("Texture id %1").arg((int)FontTex));
+
 	};
 	// 此处判断发生在渲染第一次执行或更新(添加)字体后
 	if (!this->FontAtlas->IsBuilt()) {
 		if (FontTex) {
-			this->glDeleteTextures(1, &FontTex);
+			if (this->context()->extraFunctions()->glIsTexture(FontTex))
+				this->context()->extraFunctions()->glDeleteTextures(1, &FontTex);
 			FontTex = {};
 		}
+		//qDebug() << u8"文字更新 重建纹理  ";
 		buildFontTex();
 	}
 	// 此处是由于 多个widget间共享 FontAtlas, 但 QT opengl 的特性(opengl窗口对象间不共享纹理ID)，因此添加
 	if (!FontTex)
+	{
+		//qDebug() << u8"纹理ID 不存在 重建纹理  ";
 		buildFontTex();
+	}
 }
 void QImguiWidget::QtOpenGlSetClearRenderTarget() {
-	this->glViewport(0, 0, width(), height());
-	this->glClearColor(ClearColor.redF(), ClearColor.greenF(), ClearColor.blueF(), ClearColor.alphaF());
-	this->glClear(GL_COLOR_BUFFER_BIT);
+
+	auto* funs = this->context()->extraFunctions();
+	funs->glViewport(0, 0, width(), height());
+	funs->glClearColor(ClearColor.redF(), ClearColor.greenF(), ClearColor.blueF(), ClearColor.alphaF());
+	funs->glClear(GL_COLOR_BUFFER_BIT);
 }
 void QImguiWidget::QtOpenGlRenderData() {
 	// 选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 	ImGui::SetCurrentContext(ctx->imgui);
 	const ImGuiIO& io = ImGui::GetIO();
-
+	auto* funs = this->context()->extraFunctions();
 	// Backup GL state
 	GLint last_active_texture;
-	glGetIntegerv(GL_ACTIVE_TEXTURE, &last_active_texture);
-	glActiveTexture(GL_TEXTURE0);
+	funs->glGetIntegerv(GL_ACTIVE_TEXTURE, &last_active_texture);
+	funs->glActiveTexture(GL_TEXTURE0);
 	GLint last_program;
-	glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
+	funs->glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
 	GLint last_texture;
-	glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
+	funs->glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
 	GLint last_array_buffer;
-	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
+	funs->glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
 	GLint last_element_array_buffer;
-	glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_array_buffer);
+	funs->glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_array_buffer);
 	GLint last_vertex_array;
-	glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
+	funs->glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
 	GLint last_blend_src_rgb;
-	glGetIntegerv(GL_BLEND_SRC_RGB, &last_blend_src_rgb);
+	funs->glGetIntegerv(GL_BLEND_SRC_RGB, &last_blend_src_rgb);
 	GLint last_blend_dst_rgb;
-	glGetIntegerv(GL_BLEND_DST_RGB, &last_blend_dst_rgb);
+	funs->glGetIntegerv(GL_BLEND_DST_RGB, &last_blend_dst_rgb);
 	GLint last_blend_src_alpha;
-	glGetIntegerv(GL_BLEND_SRC_ALPHA, &last_blend_src_alpha);
+	funs->glGetIntegerv(GL_BLEND_SRC_ALPHA, &last_blend_src_alpha);
 	GLint last_blend_dst_alpha;
-	glGetIntegerv(GL_BLEND_DST_ALPHA, &last_blend_dst_alpha);
+	funs->glGetIntegerv(GL_BLEND_DST_ALPHA, &last_blend_dst_alpha);
 	GLint last_blend_equation_rgb;
-	glGetIntegerv(GL_BLEND_EQUATION_RGB, &last_blend_equation_rgb);
+	funs->glGetIntegerv(GL_BLEND_EQUATION_RGB, &last_blend_equation_rgb);
 	GLint last_blend_equation_alpha;
-	glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &last_blend_equation_alpha);
+	funs->glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &last_blend_equation_alpha);
 	GLint last_viewport[4];
-	glGetIntegerv(GL_VIEWPORT, last_viewport);
+	funs->glGetIntegerv(GL_VIEWPORT, last_viewport);
 	GLint last_scissor_box[4];
-	glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
-	GLboolean last_enable_blend = glIsEnabled(GL_BLEND);
-	GLboolean last_enable_cull_face = glIsEnabled(GL_CULL_FACE);
-	GLboolean last_enable_depth_test = glIsEnabled(GL_DEPTH_TEST);
-	GLboolean last_enable_scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+	funs->glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
+	GLboolean last_enable_blend = funs->glIsEnabled(GL_BLEND);
+	GLboolean last_enable_cull_face = funs->glIsEnabled(GL_CULL_FACE);
+	GLboolean last_enable_depth_test = funs->glIsEnabled(GL_DEPTH_TEST);
+	GLboolean last_enable_scissor_test = funs->glIsEnabled(GL_SCISSOR_TEST);
 
 	// Setup render state: alpha-blending enabled, no face culling, no depth testing, scissor enabled
-	glEnable(GL_BLEND);
-	glBlendEquation(GL_FUNC_ADD);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glDisable(GL_CULL_FACE);
-	glDisable(GL_DEPTH_TEST);
-	glEnable(GL_SCISSOR_TEST);
+	funs->glEnable(GL_BLEND);
+	funs->glBlendEquation(GL_FUNC_ADD);
+	funs->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	funs->glDisable(GL_CULL_FACE);
+	funs->glDisable(GL_DEPTH_TEST);
+	funs->glEnable(GL_SCISSOR_TEST);
 
 	// Setup viewport, orthographic projection matrix
-	glViewport(0, 0, (GLsizei)ctx->fb_width, (GLsizei)ctx->fb_height);
+	funs->glViewport(0, 0, (GLsizei)ctx->fb_width, (GLsizei)ctx->fb_height);
 	const float ortho_projection[4][4] = {
 		{2.0f / io.DisplaySize.x, 0.0f, 0.0f, 0.0f},
 		{0.0f, 2.0f / -io.DisplaySize.y, 0.0f, 0.0f},
 		{0.0f, 0.0f, -1.0f, 0.0f},
 		{-1.0f, 1.0f, 0.0f, 1.0f},
 	};
-	glUseProgram(ctx->ShaderHandle);
-	glUniform1i(ctx->AttribLocationTex, 0);
-	glUniformMatrix4fv(ctx->AttribLocationProjMtx, 1, GL_FALSE, &ortho_projection[0][0]);
-	glBindVertexArray(ctx->VaoHandle);
+	funs->glUseProgram(ctx->ShaderHandle);
+	funs->glUniform1i(ctx->AttribLocationTex, 0);
+	funs->glUniformMatrix4fv(ctx->AttribLocationProjMtx, 1, GL_FALSE, &ortho_projection[0][0]);
+	funs->glBindVertexArray(ctx->VaoHandle);
 
 	for (int n = 0; n < ctx->DrawData.count(); n++) {
 		const ImDrawList* cmd_list = ctx->DrawData[n];
 		const ImDrawIdx* idx_buffer_offset = 0;
 
-		glBindBuffer(GL_ARRAY_BUFFER, ctx->VboHandle);
-		glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)cmd_list->VtxBuffer.Size * sizeof(ImDrawVert),
+		funs->glBindBuffer(GL_ARRAY_BUFFER, ctx->VboHandle);
+		funs->glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)cmd_list->VtxBuffer.Size * sizeof(ImDrawVert),
 			(const GLvoid*)cmd_list->VtxBuffer.Data, GL_STREAM_DRAW);
 
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ctx->ElementsHandle);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx),
+		funs->glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ctx->ElementsHandle);
+		funs->glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx),
 			(const GLvoid*)cmd_list->IdxBuffer.Data, GL_STREAM_DRAW);
 
 		for (int cmd_i = 0; cmd_i < cmd_list->CmdBuffer.Size; cmd_i++) {
@@ -446,10 +524,10 @@ void QImguiWidget::QtOpenGlRenderData() {
 				pcmd->UserCallback(cmd_list, pcmd);
 			}
 			else {
-				glBindTexture(GL_TEXTURE_2D, reinterpret_cast<decltype(this)>(pcmd->TextureId)->FontTex);
-				glScissor((int)pcmd->ClipRect.x, (int)(ctx->fb_height - pcmd->ClipRect.w),
+				funs->glBindTexture(GL_TEXTURE_2D, (GLuint)this->FontTex);
+				funs->glScissor((int)pcmd->ClipRect.x, (int)(ctx->fb_height - pcmd->ClipRect.w),
 					(int)(pcmd->ClipRect.z - pcmd->ClipRect.x), (int)(pcmd->ClipRect.w - pcmd->ClipRect.y));
-				glDrawElements(GL_TRIANGLES, (GLsizei)pcmd->ElemCount,
+				funs->glDrawElements(GL_TRIANGLES, (GLsizei)pcmd->ElemCount,
 					sizeof(ImDrawIdx) == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, idx_buffer_offset);
 			}
 			idx_buffer_offset += pcmd->ElemCount;
@@ -457,32 +535,32 @@ void QImguiWidget::QtOpenGlRenderData() {
 	}
 
 	// Restore modified GL state
-	glUseProgram(last_program);
-	glBindTexture(GL_TEXTURE_2D, last_texture);
-	glActiveTexture(last_active_texture);
-	glBindVertexArray(last_vertex_array);
-	glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, last_element_array_buffer);
-	glBlendEquationSeparate(last_blend_equation_rgb, last_blend_equation_alpha);
-	glBlendFuncSeparate(last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha);
+	funs->glUseProgram(last_program);
+	funs->glBindTexture(GL_TEXTURE_2D, last_texture);
+	funs->glActiveTexture(last_active_texture);
+	funs->glBindVertexArray(last_vertex_array);
+	funs->glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
+	funs->glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, last_element_array_buffer);
+	funs->glBlendEquationSeparate(last_blend_equation_rgb, last_blend_equation_alpha);
+	funs->glBlendFuncSeparate(last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha);
 	if (last_enable_blend)
-		glEnable(GL_BLEND);
+		funs->glEnable(GL_BLEND);
 	else
-		glDisable(GL_BLEND);
+		funs->glDisable(GL_BLEND);
 	if (last_enable_cull_face)
-		glEnable(GL_CULL_FACE);
+		funs->glEnable(GL_CULL_FACE);
 	else
-		glDisable(GL_CULL_FACE);
+		funs->glDisable(GL_CULL_FACE);
 	if (last_enable_depth_test)
-		glEnable(GL_DEPTH_TEST);
+		funs->glEnable(GL_DEPTH_TEST);
 	else
-		glDisable(GL_DEPTH_TEST);
+		funs->glDisable(GL_DEPTH_TEST);
 	if (last_enable_scissor_test)
-		glEnable(GL_SCISSOR_TEST);
+		funs->glEnable(GL_SCISSOR_TEST);
 	else
-		glDisable(GL_SCISSOR_TEST);
-	glViewport(last_viewport[0], last_viewport[1], (GLsizei)last_viewport[2], (GLsizei)last_viewport[3]);
-	glScissor(last_scissor_box[0], last_scissor_box[1], (GLsizei)last_scissor_box[2], (GLsizei)last_scissor_box[3]);
+		funs->glDisable(GL_SCISSOR_TEST);
+	funs->glViewport(last_viewport[0], last_viewport[1], (GLsizei)last_viewport[2], (GLsizei)last_viewport[3]);
+	funs->glScissor(last_scissor_box[0], last_scissor_box[1], (GLsizei)last_scissor_box[2], (GLsizei)last_scissor_box[3]);
 }
 void QImguiWidget::mousePressEvent(QMouseEvent* event) {
 
@@ -522,7 +600,9 @@ void QImguiWidget::mouseReleaseEvent(QMouseEvent* event) {
 	}
 
 }
-void QImguiWidget::mouseDoubleClickEvent(QMouseEvent* event) {}
+void QImguiWidget::mouseDoubleClickEvent(QMouseEvent* event) {
+    return QOpenGLWidget::mouseDoubleClickEvent(event);
+}
 void QImguiWidget::mouseMoveEvent(QMouseEvent* event) {
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 	if (ctx->imgui) {

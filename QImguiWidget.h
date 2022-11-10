@@ -7,7 +7,7 @@
 #include <QMouseEvent>
 #include "imgui.h"
 
-class QImguiWidget : public QOpenGLWidget, private QOpenGLExtraFunctions {
+class QImguiWidget : public QOpenGLWidget {
     Q_OBJECT
 public:
     QImguiWidget(QWidget* parent);
@@ -25,7 +25,11 @@ protected:/*opengl impl backend*/
     void initializeGL() override;
     void resizeGL(int w, int h) override;
     void paintGL() override;
+    void closeEvent(QCloseEvent* event)override;
+private:
     //opengl utils
+    void QtOpenGlDevicesCreate();
+    void QtOpenGlDevicesClean();
     void QtOpenGlNewFarme();
     void QtOpenGlSetClearRenderTarget();
     void QtOpenGlRenderData();
