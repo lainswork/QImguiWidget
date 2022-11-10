@@ -21,7 +21,7 @@
 /*Qt opengl backend res*/
 struct QImguiWidgetImplContext
 {
-	ImGuiContext* imgui;
+	ImGuiContext* imgui = nullptr;
 	int          ShaderHandle = 0, VertHandle = 0, FragHandle = 0;
 	int          AttribLocationTex = 0, AttribLocationProjMtx = 0;
 	int          AttribLocationPosition = 0, AttribLocationUV = 0, AttribLocationColor = 0;
@@ -31,14 +31,11 @@ struct QImguiWidgetImplContext
 	bool frameDrawing = false;
 	QVector<ImDrawList*> DrawData;
 	QElapsedTimer                                    Timer;
-	QImguiWidgetImplContext(ImFontAtlas* shared_font_atlas = NULL) {
-		this->imgui = ImGui::CreateContext(shared_font_atlas);
+	QImguiWidgetImplContext() {
 		Timer.start();
 	}
 	~QImguiWidgetImplContext() {
-		for (auto i : this->DrawData)
-			ImGui::MemFree(i);
-		if (this->imgui)ImGui::DestroyContext(this->imgui);
+
 	}
 };
 
@@ -56,18 +53,28 @@ QImguiWidget::QImguiWidget(QWidget* parent) : QOpenGLWidget(parent) {
 		});
 	timer->start(16);
 	this->FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas());
+	this->impl = new QImguiWidgetImplContext();
+
 }
 
 QImguiWidget::~QImguiWidget() {
-	if (this->impl)
+	if (this->impl) {
+		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+		for (auto i : ctx->DrawData)
+			ImGui::MemFree(i);
+		if (ctx->imgui)ImGui::DestroyContext(ctx->imgui);
 		delete reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+	}
 }
-bool QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
+QImguiWidget* QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 	//初始化
 	this->FontAtlas.reset();
 	this->FontAtlas = FontAtlas;
-	this->impl = new QImguiWidgetImplContext(FontAtlas.get());
+
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+	ctx->imgui = ImGui::CreateContext(FontAtlas.get());
+
+
 	ImGui::SetCurrentContext(ctx->imgui); //选定imgui上下文
 	ImGui::GetIO().SetClipboardTextFn = [](void* user_data, const char* text) {
 		Q_UNUSED(user_data);
@@ -85,28 +92,28 @@ bool QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
 	//我们在widget窗口销毁时进行OPENGL资源'后处理'
 	QObject::connect(this, &QWidget::destroyed, [this]() {
 		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-		// 销毁字体纹理
-		if (FontTex) {
-			this->glDeleteTextures(1, &FontTex);
-			FontTex = {};
-		}
-		if (ctx->VaoHandle)
-			glDeleteVertexArrays(1, &ctx->VaoHandle);
-		if (ctx->ElementsHandle)
-			glDeleteBuffers(1, &ctx->ElementsHandle);
-		if (ctx->VboHandle)
-			glDeleteBuffers(1, &ctx->VboHandle);
-		if (ctx->FragHandle)
-			glDeleteShader(ctx->FragHandle);
-		if (ctx->VertHandle)
-			glDeleteShader(ctx->VertHandle);
-		if (ctx->ShaderHandle)
-			glDeleteProgram(ctx->ShaderHandle);
+	// 销毁字体纹理
+	if (FontTex) {
+		this->glDeleteTextures(1, &FontTex);
+		FontTex = {};
+	}
+	if (ctx->VaoHandle)
+		glDeleteVertexArrays(1, &ctx->VaoHandle);
+	if (ctx->ElementsHandle)
+		glDeleteBuffers(1, &ctx->ElementsHandle);
+	if (ctx->VboHandle)
+		glDeleteBuffers(1, &ctx->VboHandle);
+	if (ctx->FragHandle)
+		glDeleteShader(ctx->FragHandle);
+	if (ctx->VertHandle)
+		glDeleteShader(ctx->VertHandle);
+	if (ctx->ShaderHandle)
+		glDeleteProgram(ctx->ShaderHandle);
 		});
 
 	this->OnImguiInitialized();
 
-	return true;
+    return this;
 }
 void QImguiWidget::RunImguiWidgets() {
 #ifdef _DEBUG
@@ -280,8 +287,15 @@ void QImguiWidget::initializeGL() {
 }
 void QImguiWidget::resizeGL(int w, int h) { this->glViewport(0.0f, 0.0f, w, h); }
 void QImguiWidget::paintGL() {
+
+
 	// 选定imgui上下文
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
+
+	if (!ctx || !ctx->imgui)
+		return QOpenGLWidget::paintGL();
+
+
 	// frameDrawing 的存在是为了防止递归调用，RunImguiWidgets 中可能存在阻塞式的QT窗口
 	if (!ctx->frameDrawing) {
 		ctx->frameDrawing = true;
@@ -296,7 +310,7 @@ void QImguiWidget::paintGL() {
 
 		// 将绘制数据放到 ctx->DrawData 中
 		auto* DrawData = ImGui::GetDrawData();
-		
+
 		const ImGuiIO& io = ImGui::GetIO();
 		ctx->fb_width = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
 		ctx->fb_height = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
@@ -319,10 +333,10 @@ void QImguiWidget::paintGL() {
 			for (size_t i = 0; i < needDrawList; i++)
 				ctx->DrawData.push_back(DrawData->CmdLists[oriDrawListCount + i]->CloneOutput());
 		}
-		
+
 		ctx->frameDrawing = false;
 	}
-	
+
 	this->QtOpenGlSetClearRenderTarget();
 	this->QtOpenGlRenderData();
 
@@ -475,58 +489,86 @@ void QImguiWidget::mousePressEvent(QMouseEvent* event) {
 	auto button = event->button();
 	const bool key_pressed = true;
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui);
-	auto& io = ImGui::GetIO();
-	if (button & Qt::LeftButton)
-		io.AddMouseButtonEvent(0, key_pressed);
-	else if (button & Qt::RightButton)
-		io.AddMouseButtonEvent(1, key_pressed);
-	else if (button & Qt::MidButton)
-		io.AddMouseButtonEvent(2, key_pressed);
+	if (ctx->imgui) {
+		ImGui::SetCurrentContext(ctx->imgui);
+		auto& io = ImGui::GetIO();
+		if (button & Qt::LeftButton)
+			io.AddMouseButtonEvent(0, key_pressed);
+		else if (button & Qt::RightButton)
+			io.AddMouseButtonEvent(1, key_pressed);
+		else if (button & Qt::MidButton)
+			io.AddMouseButtonEvent(2, key_pressed);
+	}
+	else {
+		return QOpenGLWidget::mousePressEvent(event);
+	}
 }
 void QImguiWidget::mouseReleaseEvent(QMouseEvent* event) {
 	auto button = event->button();
 	const bool key_pressed = false;
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui);
-	auto& io = ImGui::GetIO();
-	if (button & Qt::LeftButton)
-		io.AddMouseButtonEvent(0, key_pressed);
-	else if (button & Qt::RightButton)
-		io.AddMouseButtonEvent(1, key_pressed);
-	else if (button & Qt::MidButton)
-		io.AddMouseButtonEvent(2, key_pressed);
+	if (ctx->imgui) {
+		ImGui::SetCurrentContext(ctx->imgui);
+		auto& io = ImGui::GetIO();
+		if (button & Qt::LeftButton)
+			io.AddMouseButtonEvent(0, key_pressed);
+		else if (button & Qt::RightButton)
+			io.AddMouseButtonEvent(1, key_pressed);
+		else if (button & Qt::MidButton)
+			io.AddMouseButtonEvent(2, key_pressed);
+	}
+	else {
+		return QOpenGLWidget::mouseReleaseEvent(event);
+	}
+
 }
 void QImguiWidget::mouseDoubleClickEvent(QMouseEvent* event) {}
 void QImguiWidget::mouseMoveEvent(QMouseEvent* event) {
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui);
-	ImGui::GetIO().AddMousePosEvent(event->pos().x(), event->pos().y());
+	if (ctx->imgui) {
+		ImGui::SetCurrentContext(ctx->imgui);
+		ImGui::GetIO().AddMousePosEvent(event->pos().x(), event->pos().y());
+	}
+	else {
+		return QOpenGLWidget::mouseMoveEvent(event);
+	}
+
+
 }
 void QImguiWidget::leaveEvent(QEvent* event) {
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui);
-	ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+	if (ctx->imgui) {
+		ImGui::SetCurrentContext(ctx->imgui);
+		ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+	}
+	else {
+		return QOpenGLWidget::leaveEvent(event);
+	}
 }
 #if QT_CONFIG(wheelevent)
 void QImguiWidget::wheelEvent(QWheelEvent* event) {
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ImGui::SetCurrentContext(ctx->imgui);
-	auto& io = ImGui::GetIO();
-	if (event->pixelDelta().x() != 0) {
-		io.AddMouseWheelEvent(event->pixelDelta().x() / (ImGui::GetTextLineHeight()), 0);
+	if (ctx->imgui) {
+		ImGui::SetCurrentContext(ctx->imgui);
+		auto& io = ImGui::GetIO();
+		if (event->pixelDelta().x() != 0) {
+			io.AddMouseWheelEvent(event->pixelDelta().x() / (ImGui::GetTextLineHeight()), 0);
+		}
+		else {
+			// Magic number of 120 comes from Qt doc on QWheelEvent::pixelDelta()
+			io.AddMouseWheelEvent(event->angleDelta().x() / 120.0f, 0);
+		}
+		if (event->pixelDelta().y() != 0) {
+			// 5 lines per unit
+			io.AddMouseWheelEvent(0, event->pixelDelta().y() / (5.0 * ImGui::GetTextLineHeight()));
+		}
+		else {
+			// Magic number of 120 comes from Qt doc on QWheelEvent::pixelDelta()
+			io.AddMouseWheelEvent(0, event->angleDelta().y() / 120.0f);
+		}
 	}
 	else {
-		// Magic number of 120 comes from Qt doc on QWheelEvent::pixelDelta()
-		io.AddMouseWheelEvent(event->angleDelta().x() / 120.0f, 0);
-	}
-	if (event->pixelDelta().y() != 0) {
-		// 5 lines per unit
-		io.AddMouseWheelEvent(0, event->pixelDelta().y() / (5.0 * ImGui::GetTextLineHeight()));
-	}
-	else {
-		// Magic number of 120 comes from Qt doc on QWheelEvent::pixelDelta()
-		io.AddMouseWheelEvent(0, event->angleDelta().y() / 120.0f);
+		return QOpenGLWidget::wheelEvent(event);
 	}
 }
 #endif
@@ -685,12 +727,19 @@ void QImguiWidget::keyPressEvent(QKeyEvent* event) {
 	if (!event->isAutoRepeat()) {
 		const ImGuiKey key = ImGui_ImplQt_QKeyToImGuiKey(event->key(), event);
 		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-		ImGui::SetCurrentContext(ctx->imgui);
-		auto& io = ImGui::GetIO();
-		if (key != ImGuiKey_None)
-			io.AddKeyEvent(key, true);
-		if (!event->text().isEmpty())
-			io.AddInputCharacterUTF16(event->text()[0].unicode());
+
+
+		if (ctx->imgui) {
+			ImGui::SetCurrentContext(ctx->imgui);
+			auto& io = ImGui::GetIO();
+			if (key != ImGuiKey_None)
+				io.AddKeyEvent(key, true);
+			if (!event->text().isEmpty())
+				io.AddInputCharacterUTF16(event->text()[0].unicode());
+		}
+		else {
+			return QOpenGLWidget::keyPressEvent(event);
+		}
 	}
 	else
 	{
@@ -701,9 +750,17 @@ void QImguiWidget::keyReleaseEvent(QKeyEvent* event) {
 	if (!event->isAutoRepeat()) {
 		const ImGuiKey key = ImGui_ImplQt_QKeyToImGuiKey(event->key(), event);
 		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-		ImGui::SetCurrentContext(ctx->imgui);
-		if (key != ImGuiKey_None)
-			ImGui::GetIO().AddKeyEvent(key, false);
+
+		if (ctx->imgui) {
+			ImGui::SetCurrentContext(ctx->imgui);
+			if (key != ImGuiKey_None)
+				ImGui::GetIO().AddKeyEvent(key, false);
+		}
+		else {
+			return QOpenGLWidget::keyReleaseEvent(event);
+		}
+
+
 	}
 	else
 	{
@@ -713,8 +770,14 @@ void QImguiWidget::keyReleaseEvent(QKeyEvent* event) {
 void QImguiWidget::inputMethodEvent(QInputMethodEvent* event) {
 	if (!event->commitString().isEmpty()) {
 		QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-		ImGui::SetCurrentContext(ctx->imgui);
-		ImGui::GetIO().AddInputCharactersUTF8(event->commitString().toUtf8().constData());
+
+		if (ctx->imgui) {
+			ImGui::SetCurrentContext(ctx->imgui);
+			ImGui::GetIO().AddInputCharactersUTF8(event->commitString().toUtf8().constData());
+		}
+		else {
+			return QOpenGLWidget::inputMethodEvent(event);
+		}
 	}
 	QWidget::inputMethodEvent(event);
 }

@@ -12,7 +12,7 @@ class QImguiWidget : public QOpenGLWidget, private QOpenGLExtraFunctions {
 public:
     QImguiWidget(QWidget* parent);
     ~QImguiWidget();
-    bool InitImgui(QSharedPointer<ImFontAtlas> FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas()));
+    QImguiWidget* InitImgui(QSharedPointer<ImFontAtlas> FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas()));
     QSharedPointer<ImFontAtlas> GetFontAtlas() { return FontAtlas; }
 
 protected:/*Interface*/
