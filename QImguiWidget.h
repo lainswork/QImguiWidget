@@ -4,6 +4,7 @@
 #include <QOpenGLExtraFunctions>
 #include <QColor>
 #include <QSharedPointer>
+#include <QScopedPointer>
 #include <QMouseEvent>
 #include "imgui.h"
 
@@ -12,13 +13,14 @@ class QImguiWidget : public QOpenGLWidget {
 public:
     QImguiWidget(QWidget* parent);
     ~QImguiWidget();
-    QImguiWidget* InitImgui(QSharedPointer<ImFontAtlas> FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas()));
-    QSharedPointer<ImFontAtlas> GetFontAtlas() { return FontAtlas; }
+   
+    static ImFontAtlas* GetFontAtlas();
 
 protected:/*Interface*/
     virtual void RunImguiWidgets();
     virtual void OnImguiInitialized();
 private:/*qt impl backend*/
+    void InitImgui();
     void QtImguiImplNewFarme();
 protected:/*opengl impl backend*/
     //override functions
@@ -49,6 +51,6 @@ private:/*qt event override functions for input*/
 private:
     void* impl = nullptr;
     GLuint FontTex = {};
-    QSharedPointer<ImFontAtlas> FontAtlas;
+    //QSharedPointer<ImFontAtlas> FontAtlas;
     QColor ClearColor = {20,20,20,20};
 };
