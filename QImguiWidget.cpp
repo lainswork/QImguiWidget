@@ -46,8 +46,10 @@ QImguiWidget::QImguiWidget(QWidget* parent) : QOpenGLWidget(parent) {
 	this->setAttribute(Qt::WA_InputMethodEnabled);
 	//允许切换输入法
 	this->setAttribute(Qt::WA_KeyCompression);
+	QSurfaceFormat surfaceFormat;
+	surfaceFormat.setSamples(4);//多重采样
+	setFormat(surfaceFormat); //setFormat是QOpenGLWidget的函数
 
-	this->FontAtlas = QSharedPointer<ImFontAtlas>(new ImFontAtlas());
 	this->impl = new QImguiWidgetImplContext();
 	//我们在widget窗口销毁时进行OPENGL资源'后处理'
 	//QObject::connect(this, &QWidget::destroyed, [this]() {this->QtOpenGlDevicesClean(); });
@@ -69,14 +71,25 @@ QImguiWidget::~QImguiWidget() {
 		delete reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
 	}
 }
+ImFontAtlas* QImguiWidget::GetFontAtlas() {
+#ifndef GImGui
+	static QScopedPointer<ImFontAtlas> FontAtlas;
+#else //假如定义了 GImGui 宏, 则代表开发者可能想在多线程环境下使用
+	thread_local static QScopedPointer<ImFontAtlas> FontAtlas;
+#endif
+	
+	if (!FontAtlas) {
+		FontAtlas.reset(new ImFontAtlas());
+	}
 
-QImguiWidget* QImguiWidget::InitImgui(QSharedPointer<ImFontAtlas> FontAtlas) {
+	return FontAtlas.get();
+}
+QImguiWidget* QImguiWidget::InitImgui() {
 	//初始化
-	this->FontAtlas.reset();
-	this->FontAtlas = FontAtlas;
+
 
 	QImguiWidgetImplContext* ctx = reinterpret_cast<QImguiWidgetImplContext*>(this->impl);
-	ctx->imgui = ImGui::CreateContext(FontAtlas.get());
+	ctx->imgui = ImGui::CreateContext(GetFontAtlas());
 
 
 	ImGui::SetCurrentContext(ctx->imgui); //选定imgui上下文
@@ -207,7 +220,7 @@ void QImguiWidget::initializeGL() {
 	this->QtOpenGlDevicesClean();
 	// 初始化opengl api
 	this->context()->extraFunctions()->initializeOpenGLFunctions();
-
+	this->context()->extraFunctions()->glEnable(GL_MULTISAMPLE);
 	this->QtOpenGlDevicesCreate();
 }
 void QImguiWidget::resizeGL(int w, int h) {
@@ -416,15 +429,15 @@ void QImguiWidget::QtOpenGlNewFarme() {
 	auto buildFontTex = [this]() {
 		unsigned char* pixels = 0;
 		int            width, height;
-		FontAtlas->GetTexDataAsRGBA32(&pixels, &width, &height);
+		GetFontAtlas()->GetTexDataAsRGBA32(&pixels, &width, &height);
 		FontTex = this->CreateTexture(pixels, width, height, GL_RGBA);
-		FontAtlas->SetTexID((ImTextureID)1);
+		GetFontAtlas()->SetTexID((ImTextureID)1);
 		//qDebug() << " GL FontAtlas Texture build!  " << FontTex;
 		//this->setWindowTitle(QString("Texture id %1").arg((int)FontTex));
 
 	};
 	// 此处判断发生在渲染第一次执行或更新(添加)字体后
-	if (!this->FontAtlas->IsBuilt()) {
+	if (!this->GetFontAtlas()->IsBuilt()) {
 		if (FontTex) {
 			if (this->context()->extraFunctions()->glIsTexture(FontTex))
 				this->context()->extraFunctions()->glDeleteTextures(1, &FontTex);
