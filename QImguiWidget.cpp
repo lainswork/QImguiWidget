@@ -101,7 +101,7 @@ void QImguiWidget::InitImgui() {
 
     this->OnImguiInitialized();
 
-    return this;
+
 }
 void QImguiWidget::RunImguiWidgets() {
 #ifdef _DEBUG
