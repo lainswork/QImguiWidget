@@ -85,19 +85,25 @@ void QImguiWidget::InitImgui() {
     ctx->imgui                   = ImGui::CreateContext(GetFontAtlas());
 
     ImGui::SetCurrentContext(ctx->imgui); // 选定imgui上下文
-    ImGui::GetIO().SetClipboardTextFn = [](void *user_data, const char *text) {
+    ImGuiIO &io                       = ImGui::GetIO();
+    io.SetClipboardTextFn = [](void *user_data, const char *text) {
         Q_UNUSED(user_data);
         QGuiApplication::clipboard()->setText(text);
     };
-    ImGui::GetIO().GetClipboardTextFn = [](void *user_data) {
+    io.GetClipboardTextFn = [](void *user_data) {
         Q_UNUSED(user_data);
         static QByteArray g_currentClipboardText = QGuiApplication::clipboard()->text().toUtf8();
         return (const char *)g_currentClipboardText.data();
     };
 #ifndef QT_NO_CURSOR
-    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
-    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
+    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
+    io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
 #endif
+#ifdef IMGUI_HAS_DOCK
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
+#endif // IMGUI_HAS_DOCK
 
     this->OnImguiInitialized();
 
