@@ -6,8 +6,8 @@
 #include <QSharedPointer>
 #include <QScopedPointer>
 #include <QMouseEvent>
+#include <functional>
 #include "imgui.h"
-
 class QImguiWidget : public QOpenGLWidget {
     Q_OBJECT
 public:
@@ -17,7 +17,9 @@ public:
     static ImFontAtlas* GetFontAtlas();
 
 protected: /*Interface*/
-    virtual void RunImguiWidgets();
+    virtual void QImguiBegin();
+    virtual void QImguiContent();
+    virtual void QImguiEnd();
     virtual void OnImguiInitialized();
     GLuint       CreateTexture(const uint8_t *data, int w, int h, int fmt);
 private:/*qt impl backend*/

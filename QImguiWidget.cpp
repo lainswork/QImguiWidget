@@ -106,20 +106,9 @@ void QImguiWidget::InitImgui() {
 #endif // IMGUI_HAS_DOCK
 
 }
-void QImguiWidget::RunImguiWidgets() {
-#ifdef _DEBUG
-    static bool show_demo_window = true;
-    if (show_demo_window)
-        ImGui::ShowDemoWindow(&show_demo_window);
-    ImGui::GetForegroundDrawList()->AddCircleFilled(ImGui::GetIO().MousePos, 5, 0xff0000ff);
-    ImGui::GetForegroundDrawList()->AddText({10, 10}, 0xff0000ff,
-                                            QString("DeltaTime[ %1 ] / FPS[ %2 ]")
-                                                .arg(ImGui::GetIO().DeltaTime)
-                                                .arg((int)(1.0f / ImGui::GetIO().DeltaTime))
-                                                .toUtf8()
-                                                .data());
-#endif // DEBUG
-}
+void QImguiWidget::QImguiBegin() {}
+void QImguiWidget::QImguiContent() {}
+void QImguiWidget::QImguiEnd() {}
 void QImguiWidget::OnImguiInitialized() {
 #ifdef _DEBUG
     ImGui::StyleColorsLight();
@@ -240,7 +229,15 @@ void QImguiWidget::paintGL() {
         this->QtImguiImplNewFarme();
         this->QtOpenGlNewFarme();
         ImGui::NewFrame();
-        this->RunImguiWidgets();
+        this->QImguiBegin();
+        
+        this->QImguiContent();
+        /*for (auto i : this->children()) {
+            if (i->inherits("QImguiWidget")) {
+                ((QImguiWidget*)i)->QImguiContent();
+            }
+        }*/
+        this->QImguiEnd();
         ImGui::EndFrame();
         // imgui 生成绘制数据
         ImGui::Render();
@@ -521,7 +518,7 @@ void QImguiWidget::QtOpenGlRenderData() {
                 if (pcmd->TextureId == (ImTextureID)-1)
                     funs->glBindTexture(GL_TEXTURE_2D, (GLuint)this->FontTex);
                 else
-                    funs->glBindTexture(GL_TEXTURE_2D, (GLuint)pcmd->TextureId);
+                    funs->glBindTexture(GL_TEXTURE_2D, (GLuint)(size_t)pcmd->TextureId);
                 funs->glScissor((int)pcmd->ClipRect.x, (int)(ctx->fb_height - pcmd->ClipRect.w),
                                 (int)(pcmd->ClipRect.z - pcmd->ClipRect.x), (int)(pcmd->ClipRect.w - pcmd->ClipRect.y));
                 funs->glDrawElements(GL_TRIANGLES, (GLsizei)pcmd->ElemCount,
