@@ -16,9 +16,10 @@ public:
    
     static ImFontAtlas* GetFontAtlas();
 
-protected:/*Interface*/
+protected: /*Interface*/
     virtual void RunImguiWidgets();
     virtual void OnImguiInitialized();
+    GLuint       CreateTexture(const uint8_t *data, int w, int h, int fmt);
 private:/*qt impl backend*/
     void InitImgui();
     void QtImguiImplNewFarme();
@@ -35,7 +36,7 @@ private:
     void QtOpenGlNewFarme();
     void QtOpenGlSetClearRenderTarget();
     void QtOpenGlRenderData();
-    GLuint CreateTexture(uint8_t* data, int w, int h, int fmt);
+    
 private:/*qt event override functions for input*/
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;

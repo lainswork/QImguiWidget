@@ -105,9 +105,6 @@ void QImguiWidget::InitImgui() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
 #endif // IMGUI_HAS_DOCK
 
-    this->OnImguiInitialized();
-
-
 }
 void QImguiWidget::RunImguiWidgets() {
 #ifdef _DEBUG
@@ -193,7 +190,7 @@ void QImguiWidget::QtImguiImplNewFarme() {
     }
 #endif
 }
-GLuint QImguiWidget::CreateTexture(uint8_t *data, int w, int h, int fmt) {
+GLuint QImguiWidget::CreateTexture(const uint8_t *data, int w, int h, int fmt) {
     GLuint tex{};
     GLint  last_texture{};
     auto  *gl   = this->context();
@@ -222,6 +219,7 @@ void QImguiWidget::initializeGL() {
     this->context()->extraFunctions()->initializeOpenGLFunctions();
     this->context()->extraFunctions()->glEnable(GL_MULTISAMPLE);
     this->QtOpenGlDevicesCreate();
+    OnImguiInitialized();
 }
 void QImguiWidget::resizeGL(int w, int h) { this->context()->extraFunctions()->glViewport(0.0f, 0.0f, w, h); }
 void QImguiWidget::paintGL() {
@@ -414,7 +412,7 @@ void QImguiWidget::QtOpenGlNewFarme() {
         int            width, height;
         GetFontAtlas()->GetTexDataAsRGBA32(&pixels, &width, &height);
         FontTex = this->CreateTexture(pixels, width, height, GL_RGBA);
-        GetFontAtlas()->SetTexID((ImTextureID)1);
+        GetFontAtlas()->SetTexID((ImTextureID)-1);
         // qDebug() << " GL FontAtlas Texture build!  " << FontTex;
         // this->setWindowTitle(QString("Texture id %1").arg((int)FontTex));
     };
@@ -520,7 +518,10 @@ void QImguiWidget::QtOpenGlRenderData() {
             if (pcmd->UserCallback) {
                 pcmd->UserCallback(cmd_list, pcmd);
             } else {
-                funs->glBindTexture(GL_TEXTURE_2D, (GLuint)this->FontTex);
+                if (pcmd->TextureId == (ImTextureID)-1)
+                    funs->glBindTexture(GL_TEXTURE_2D, (GLuint)this->FontTex);
+                else
+                    funs->glBindTexture(GL_TEXTURE_2D, (GLuint)pcmd->TextureId);
                 funs->glScissor((int)pcmd->ClipRect.x, (int)(ctx->fb_height - pcmd->ClipRect.w),
                                 (int)(pcmd->ClipRect.z - pcmd->ClipRect.x), (int)(pcmd->ClipRect.w - pcmd->ClipRect.y));
                 funs->glDrawElements(GL_TRIANGLES, (GLsizei)pcmd->ElemCount,
