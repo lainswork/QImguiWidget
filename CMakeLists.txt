@@ -11,3 +11,5 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include("${CMAKE_CURRENT_LIST_DIR}/QImguiWidgetConfig.cmake")
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/example")
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/QtDesignerPlugin")
