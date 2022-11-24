@@ -31,3 +31,5 @@ target_include_directories(${QImguiWidget_Name} PUBLIC
 ${CMAKE_CURRENT_LIST_DIR}/hdr/
 )
 target_link_libraries(${QImguiWidget_Name} Qt5::Widgets imgui::imgui)
+
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/example")
